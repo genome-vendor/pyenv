@@ -4,8 +4,8 @@ load test_helper
 
 @test "blank invocation" {
   run pyenv
-  assert_success
-  assert [ "${lines[0]}" == "pyenv 20150601" ]
+  assert_failure
+  assert_line 0 "$(pyenv---version)"
 }
 
 @test "invalid command" {
@@ -70,6 +70,7 @@ load test_helper
 }
 
 @test "PYENV_HOOK_PATH includes pyenv built-in plugins" {
+  unset PYENV_HOOK_PATH
   run pyenv echo "PYENV_HOOK_PATH"
-  assert_success ":${PYENV_ROOT}/pyenv.d:${BATS_TEST_DIRNAME%/*}/pyenv.d:/usr/local/etc/pyenv.d:/etc/pyenv.d:/usr/lib/pyenv/hooks"
+  assert_success "${PYENV_ROOT}/pyenv.d:${BATS_TEST_DIRNAME%/*}/pyenv.d:/usr/local/etc/pyenv.d:/etc/pyenv.d:/usr/lib/pyenv/hooks"
 }

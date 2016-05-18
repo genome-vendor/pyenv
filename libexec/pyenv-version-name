@@ -8,6 +8,13 @@ if [ -z "$PYENV_VERSION" ]; then
   PYENV_VERSION="$(pyenv-version-file-read "$PYENV_VERSION_FILE" || true)"
 fi
 
+OLDIFS="$IFS"
+IFS=$'\n' scripts=(`pyenv-hooks version-name`)
+IFS="$OLDIFS"
+for script in "${scripts[@]}"; do
+  source "$script"
+done
+
 if [ -z "$PYENV_VERSION" ] || [ "$PYENV_VERSION" = "system" ]; then
   echo "system"
   exit
@@ -28,7 +35,7 @@ OLDIFS="$IFS"
     elif version_exists "${version#python-}"; then
       versions=("${versions[@]}" "${version#python-}")
     else
-      echo "pyenv: version \`$version' is not installed" >&2
+      echo "pyenv: version \`$version' is not installed (set by $(pyenv-version-origin))" >&2
       any_not_installed=1
     fi
   done

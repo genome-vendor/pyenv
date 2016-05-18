@@ -1,5 +1,112 @@
 ## Version History
 
+## Unreleased
+
+## 20160509
+
+* python-build: Fixed wrong SHA256 of `pypy-5.1-linux_x86_64-portable.tar.bz2` (#586, #587)
+* python-build: Added miniconda[23]-4.0.5
+* python-build: Added PyPy (Portable) 5.1.1 (#591, #592, #593)
+
+## 20160422
+
+* python-build: Added PyPy 5.1 (#579)
+* python-build: Added PyPy 5.1 Portable
+* python-build: Added PyPy 5.0.1 (#558)
+* python-build: Added PyPy 5.0.1 Portable
+* python-build: Added PyPy 5.0 Portable
+* python-build: Added anaconda[23]-4.0.0 (#572)
+* python-build: Added Jython 2.7.1b3 (#557)
+
+## 20160310
+
+* python-build: Add PyPy-5.0.0 (#555)
+* pyenv: Import recent changes from rbenv 1.0 (#549)
+
+## 20160303
+
+* python-build: Add anaconda[23]-2.5.0 (#543)
+* python-build: Import recent changes from ruby-build 20160130
+* python-build: Compile with `--enable-unicode=ucs4` by default for CPython (#257, #542)
+* python-build: Switch download URL of Continuum products from HTTP to HTTPS (#543)
+* python-build: Added pypy-dev special case in pyenv-install to use py27 (#547)
+* python-build: Upgrade OpenSSL to 1.0.2g (#550)
+
+## 20160202
+
+* pyenv: Run rehash automatically after `conda install`
+* python-build: Add CPython 3.4.4 (#511)
+* python-build: Add anaconda[23]-2.4.1, miniconda[23]-3.19.0
+* python-build: Fix broken build definitions of CPython/Stackless 3.2.x (#531)
+
+### 20151222
+
+* pyenv: Merge recent changes from rbenv as of 2015-12-14 (#504)
+* python-build: Add a `OPENSSL_NO_SSL3` patch for CPython 2.6, 2.7, 3.0, 3.1, 3.2 and 3.3 series (#507, #511)
+* python-build: Stopped using mirror at yyuu.github.io for CPython since http://www.python.org is on fast.ly
+
+### 20151210
+
+* pyenv: Add a default hook for Anaconda to look for original `$PATH` (#491)
+* pyenv: Skip virtualenv aliases on `pyenv versions --skip-aliases` (yyuu/pyenv-virtualenv#126)
+* python-build: Add CPython 2.7.11, 3.5.1 (#494, #498)
+* python-build: Update OpenSSL to 1.0.1q (#496)
+* python-build: Adding SSL patch to build 2.7.3 on Debian (#495)
+
+### 20151124
+
+* pyenv: Import recent changes from rbenv 5fb9c84e14c8123b2591d22e248f045c7f8d8a2c
+* pyenv: List anaconda-style virtual environments as a version in pyenv (#471)
+* python-build: Import recent changes from ruby-build v20151028
+* python-build: Add PyPy 4.0.1 (#489)
+* python-build: Add `miniconda*-3.18.3` (#477)
+* python-build: Add CPython 2.7.11 RC1
+
+### 20151105
+
+* python-build: Add anaconda2-2.4.0 and anacondaa3-2.4.0
+* python-biuld: Add Portable PyPy 4.0 (#472)
+
+### 20151103
+
+* python-build: Add PyPy 4.0.0 (#463)
+* python-build: Add Jython 2.7.1b2
+* python-build: Add warning about setuptools issues on CPython 3.0.1 on OS X (#456)
+
+### 20151006
+
+* pyenv: Different behaviour when invoking .py script through symlink (#379, #404)
+* pyenv: Enabled Gitter on the project (#436, #444)
+* python-build: Add Jython 2.7.1b1
+* python-build: Install OpenSSL on OS X if no proper versionn is available (#429)
+
+### 20150913
+
+* python-build: Add CPython 3.5.0
+* python-build: Remove CPython 3.5.0 release candidates
+* python-build: Fixed anaconda3 repo's paths (#439)
+* python-build: Add miniconda-3.16.0 and miniconda3-3.16.0 (#435)
+
+### 20150901
+
+* python-build: Add CPython 3.5.0 release candidates; 3.5.0rc1 and 3.5.0rc2
+* python-build: Disabled `_FORTITY_SOURCE` to fix CPython >= 2.4, <= 2.4.3 builds (#422)
+* python-build: Removed CPython 3.5.0 betas
+* python-build: Add miniconda-3.10.1 and miniconda3-3.10.1 (#414)
+* python-build: Add PyPy 2.6.1 (#433)
+* python-build: Add PyPy-STM 2.3 and 2.5.1 (#428)
+* python-build: Ignore user's site-packages on ensurepip/get-pip (#411)
+* pyenv: Import recent changes from ruby-build v20150818
+
+#### 20150719
+
+* python-build: Add CPython `3.6-dev` (#413)
+* python-build: Add Anaconda/Anaconda3 2.3.0
+* python-build: Fix download URL of portable PyPy 2.6 (fixes #389)
+* python-build: Use custom `MACOSX_DEPLOYMENT_TARGET` if defined (#312)
+* python-build: Use original CPython repository instead of mirror at bitbucket.org as the source of `*-dev` versions (#409)
+* python-build: Pin pip version to 1.5.6 for python 3.1.5 (#351)
+
 #### 20150601
 
 * python-build: Add PyPy 2.6.0
