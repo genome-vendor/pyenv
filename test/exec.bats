@@ -16,8 +16,16 @@ create_executable() {
 
 @test "fails with invalid version" {
   export PYENV_VERSION="3.4"
-  run pyenv-exec python -v
-  assert_failure "pyenv: version \`3.4' is not installed"
+  run pyenv-exec python -V
+  assert_failure "pyenv: version \`3.4' is not installed (set by PYENV_VERSION environment variable)"
+}
+
+@test "fails with invalid version set from file" {
+  mkdir -p "$PYENV_TEST_DIR"
+  cd "$PYENV_TEST_DIR"
+  echo 2.7 > .python-version
+  run pyenv-exec rspec
+  assert_failure "pyenv: version \`2.7' is not installed (set by $PWD/.python-version)"
 }
 
 @test "completes with names of executables" {
@@ -29,32 +37,20 @@ create_executable() {
   run pyenv-completions exec
   assert_success
   assert_output <<OUT
+--help
 fab
 python
 OUT
 }
 
-@test "supports hook path with spaces" {
-  hook_path="${PYENV_TEST_DIR}/custom stuff/pyenv hooks"
-  mkdir -p "${hook_path}/exec"
-  echo "export HELLO='from hook'" > "${hook_path}/exec/hello.bash"
-
-  export PYENV_VERSION=system
-  PYENV_HOOK_PATH="$hook_path" run pyenv-exec env
-  assert_success
-  assert_line "HELLO=from hook"
-}
-
 @test "carries original IFS within hooks" {
-  hook_path="${PYENV_TEST_DIR}/pyenv.d"
-  mkdir -p "${hook_path}/exec"
-  cat > "${hook_path}/exec/hello.bash" <<SH
+  create_hook exec hello.bash <<SH
 hellos=(\$(printf "hello\\tugly world\\nagain"))
 echo HELLO="\$(printf ":%s" "\${hellos[@]}")"
 SH
 
   export PYENV_VERSION=system
-  PYENV_HOOK_PATH="$hook_path" IFS=$' \t\n' run pyenv-exec env
+  IFS=$' \t\n' run pyenv-exec env
   assert_success
   assert_line "HELLO=:hello:ugly:world:again"
 }

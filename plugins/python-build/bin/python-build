@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 #
-# Usage: python-build [-kvp] <definition> <prefix>
+# Usage: python-build [-kpv] <definition> <prefix>
 #        python-build --definitions
+#        python-build --version
 #
 #   -k/--keep        Do not remove source tree after installation
-#   -v/--verbose     Verbose mode: print compilation status to stdout
 #   -p/--patch       Apply a patch from stdin before building
+#   -v/--verbose     Verbose mode: print compilation status to stdout
 #   -4/--ipv4        Resolve names to IPv4 addresses only
 #   -6/--ipv6        Resolve names to IPv6 addresses only
 #   --definitions    List all built-in definitions
+#   --version        Show version of python-build
 #   -g/--debug       Build a debug version
 #
 
-PYTHON_BUILD_VERSION="20150519"
+PYTHON_BUILD_VERSION="20160130"
+
+OLDIFS="$IFS"
 
 set -E
 exec 3<&2 # preserve original stderr at fd 3
@@ -97,12 +101,18 @@ os_information() {
   fi
 }
 
+is_mac() {
+  [ "$(uname -s)" = "Darwin" ] || return 1
+  [ $# -eq 0 ] || [ "$(osx_version)" "$@" ]
+}
+
 #  9.1  -> 901
 # 10.9  -> 1009
 # 10.10 -> 1010
 osx_version() {
   local -a ver
   IFS=. ver=( `sw_vers -productVersion` )
+  IFS="$OLDIFS"
   echo $(( ${ver[0]}*100 + ${ver[1]} ))
 }
 
@@ -259,24 +269,39 @@ compute_md5() {
   fi
 }
 
+has_checksum_support() {
+  local checksum_command="$1"
+  local has_checksum_var="HAS_CHECKSUM_SUPPORT_${checksum_command}"
+
+  if [ -z "${!has_checksum_var+defined}" ]; then
+    printf -v "$has_checksum_var" "$(echo test | "$checksum_command" >/dev/null; echo $?)"
+  fi
+  return "${!has_checksum_var}"
+}
+
 verify_checksum() {
-  # If there's no SHA2 support, return success
-  [ -n "$HAS_SHA2_SUPPORT" ] || return 0
-  local checksum_command="compute_sha2"
+  local checksum_command
+  local filename="$1"
+  local expected_checksum="$(echo "$2" | tr [A-Z] [a-z])"
 
   # If the specified filename doesn't exist, return success
-  local filename="$1"
   [ -e "$filename" ] || return 0
 
-  # If there's no expected checksum, return success
-  local expected_checksum=`echo "$2" | tr [A-Z] [a-z]`
-  [ -n "$expected_checksum" ] || return 0
+  case "${#expected_checksum}" in
+  0) return 0 ;; # empty checksum; return success
+  32) checksum_command="compute_md5" ;;
+  64) checksum_command="compute_sha2" ;;
+  *)
+    { echo
+      echo "unexpected checksum length: ${#expected_checksum} (${expected_checksum})"
+      echo "expected 0 (no checksum), 32 (MD5), or 64 (SHA2-256)"
+      echo
+    } >&4
+    return 1 ;;
+  esac
 
-  # If the checksum length is 32 chars, assume MD5, otherwise SHA2
-  if [ "${#expected_checksum}" -eq 32 ]; then
-    [ -n "$HAS_MD5_SUPPORT" ] || return 0
-    checksum_command="compute_md5"
-  fi
+  # If chosen provided checksum algorithm isn't supported, return success
+  has_checksum_support "$checksum_command" || return 0
 
   # If the computed checksum is empty, return failure
   local computed_checksum=`echo "$($checksum_command < "$filename")" | tr [A-Z] [a-z]`
@@ -347,23 +372,27 @@ fetch_tarball() {
     package_url="${package_url%%#*}"
 
     if [ -n "$PYTHON_BUILD_MIRROR_URL" ]; then
-      mirror_url="${PYTHON_BUILD_MIRROR_URL}/$checksum"
+      if [[ -z "$PYTHON_BUILD_DEFAULT_MIRROR" || $package_url != */www.python.org/* ]]; then
+        mirror_url="${PYTHON_BUILD_MIRROR_URL}/$checksum"
+      fi
     fi
   fi
 
   local tar_args="xzf"
   local package_filename="${package_name}.tar.gz"
 
-  if [ "$package_url" != "${package_url%tgz}" ]; then
-    package_filename="${package_filename%tar.gz}tgz"
-  fi
-
   if [ "$package_url" != "${package_url%bz2}" ]; then
+    if ! type -p bzip2 >/dev/null; then
+      echo "warning: bzip2 not found; consider installing \`bzip2\` package" >&4
+    fi
     package_filename="${package_filename%.gz}.bz2"
     tar_args="${tar_args/z/j}"
   fi
 
    if [ "$package_url" != "${package_url%xz}" ]; then
+     if ! type -p xz >/dev/null; then
+      echo "warning: xz not found; consider installing \`xz\` package" >&4
+     fi
      package_filename="${package_filename%.gz}.xz"
      tar_args="${tar_args/z/J}"
    fi
@@ -518,6 +547,8 @@ fetch_svn() {
 
   if type svn &>/dev/null; then
     svn co -r "$svn_rev" "$svn_url" "${package_name}" >&4 2>&1
+  elif type svnlite &>/dev/null; then
+    svnlite co -r "$svn_rev" "$svn_url" "${package_name}" >&4 2>&1
   else
     echo "error: please install Subversion and try again" >&2
     exit 1
@@ -678,12 +709,11 @@ build_package_standard() {
   ( if [ "${CFLAGS+defined}" ] || [ "${!PACKAGE_CFLAGS+defined}" ]; then
       export CFLAGS="$CFLAGS ${!PACKAGE_CFLAGS}"
     fi
-    if [ -z "$CC" ] && [ "$(uname -s)" = "Darwin" ] && [ "$(osx_version)" -ge 1010 ]; then
+    if [ -z "$CC" ] && is_mac -ge 1010; then
       export CC=clang
     fi
     ${!PACKAGE_CONFIGURE:-./configure} --prefix="${!PACKAGE_PREFIX_PATH:-$PREFIX_PATH}" \
-                                       --libdir="${!PACKAGE_PREFIX_PATH:-$PREFIX_PATH}/lib" \
-                                       $CONFIGURE_OPTS ${!PACKAGE_CONFIGURE_OPTS} "${!PACKAGE_CONFIGURE_OPTS_ARRAY}"
+      $CONFIGURE_OPTS ${!PACKAGE_CONFIGURE_OPTS} "${!PACKAGE_CONFIGURE_OPTS_ARRAY}" || return 1
   ) >&4 2>&1
 
   { "$MAKE" $MAKE_OPTS ${!PACKAGE_MAKE_OPTS} "${!PACKAGE_MAKE_OPTS_ARRAY}"
@@ -714,9 +744,7 @@ build_package_ree_installer() {
   build_package_auto_tcltk
 
   local options=""
-  if [[ "Darwin" = "$(uname)" ]]; then
-    options="--no-tcmalloc"
-  fi
+  is_mac && options="--no-tcmalloc"
 
   local option
   for option in $RUBY_CONFIGURE_OPTS ${RUBY_CONFIGURE_OPTS_ARRAY[@]}; do
@@ -738,7 +766,20 @@ build_package_rbx() {
       mkdir -p vendor
       ln -s "$RUBY_BUILD_CACHE_PATH" vendor/prebuilt
     fi
-    RUBYOPT="-rubygems $RUBYOPT" ./configure --prefix="$PREFIX_PATH" $RUBY_CONFIGURE_OPTS "${RUBY_CONFIGURE_OPTS_ARRAY[@]}"
+
+    local opt
+    local -a configure_opts
+    for opt in "${RUBY_CONFIGURE_OPTS_ARRAY[@]}"; do
+      if [[ $opt == --with-openssl-dir=* ]]; then
+        local openssl_dir="${opt#*=}"
+        configure_opts[${#configure_opts[@]}]="--with-lib-dir=${openssl_dir}/lib"
+        configure_opts[${#configure_opts[@]}]="--with-include-dir=${openssl_dir}/include"
+      else
+        configure_opts[${#configure_opts[@]}]="$opt"
+      fi
+    done
+
+    RUBYOPT="-rubygems $RUBYOPT" ./configure --prefix="$PREFIX_PATH" $RUBY_CONFIGURE_OPTS "${configure_opts[@]}"
     rake install
     fix_rbx_gem_binstubs "$PREFIX_PATH"
     fix_rbx_irb "$PREFIX_PATH"
@@ -800,29 +841,10 @@ build_package_jruby() {
   fix_jruby_shebangs
 }
 
-graal_architecture() {
-  if [ "$(uname -m)" != "x86_64" ]; then
-    echo "no nightly builds available" >&2
-    exit 1
-  fi
-
-  case "$(uname -s)" in
-  "Darwin") echo "macosx-x86_64";;
-  "Linux") echo "linux-x86_64";;
-  *)
-    echo "no nightly builds available" >&2
-    exit 1;;
-  esac
-}
-
 install_jruby_launcher() {
-  # If this version of JRuby has been modified for Graal, don't overwrite the
-  # launcher scripts
-  if ! grep -q graalvm "${PREFIX_PATH}/bin/jruby"; then
-    cd "${PREFIX_PATH}/bin"
-    { ./ruby gem install jruby-launcher
-    } >&4 2>&1
-  fi
+  cd "${PREFIX_PATH}/bin"
+  { ./ruby gem install jruby-launcher
+  } >&4 2>&1
 }
 
 fix_jruby_shebangs() {
@@ -845,6 +867,23 @@ build_package_jython() {
       ( cd "${PREFIX_PATH}/bin" && ln -fs jython python )
     fi
   } >&4 2>&1
+  fix_jython_shebangs
+}
+
+fix_jython_shebangs() {
+  # Workaround for Jython 2.7+ (#458)
+  for file in "${PREFIX_PATH}/bin"/*; do
+    case "$(head -1 "${file}")" in
+    "#!"*"/bin/jython" )
+      sed -i.bak "1 s:.*:#\!\/usr\/bin\/env ${PREFIX_PATH}\/bin\/jython:" "${file}"
+      ;;
+    "#!"*"/bin/python2.7"* )
+      # Jython 2.7+ requires CPython 2.7 to run
+      sed -i.bak "1 s:.*:#\!\/usr\/bin\/env python2.7:" "${file}"
+      ;;
+    esac
+    rm -f "${file}.bak"
+  done
 }
 
 build_package_jython_builder() {
@@ -872,6 +911,8 @@ pypy_architecture() {
     "armel" ) echo "linux-armel" ;;
     "armhf" | "armv6l" | "armv7l" ) echo "linux-armhf" ;;
     "i386" | "i486" | "i586" | "i686" | "i786" ) echo "linux" ;;
+    "ppc64" ) echo "linux-ppc64" ;;
+    "ppc64le" ) echo "linux-ppc64le" ;;
     "x86_64" ) echo "linux64" ;;
     * ) return 1 ;;
     esac
@@ -890,10 +931,18 @@ pypy_architecture() {
 build_package_pypy() {
   build_package_copy
   mkdir -p "${PREFIX_PATH}/bin" "${PREFIX_PATH}/lib"
-  local pypy libpypy
+  local pypy libpypy python
   shopt -s nullglob
   for pypy in "bin/pypy"*; do
-    ( cd "${PREFIX_PATH}/bin" && ln -fs "$(basename "${pypy}")" "$(basename "${pypy}" | sed -e 's/pypy/python/')" )
+    case "${pypy##*/}" in
+    "pypy-stm" )
+      python="bin/python"
+      ;;
+    * )
+      python="$(basename "${pypy}" | sed -e 's/pypy/python/')"
+      ;;
+    esac
+    ( cd "${PREFIX_PATH}/bin" && ln -fs "${pypy##*/}" "${python##*/}" )
   done
   for libpypy in "bin/libpypy-c."*; do
     ( cd "${PREFIX_PATH}/lib" && ln -fs "../bin/$(basename "${libpypy}")" "$(basename "${libpypy}")" )
@@ -926,7 +975,9 @@ anaconda_architecture() {
   "Darwin" ) echo "MacOSX-x86_64" ;;
   "Linux" )
     case "$(uname -m)" in
+    "armv7l" ) echo "Linux-armv7l" ;;
     "i386" | "i486" | "i586" | "i686" | "i786" ) echo "Linux-x86" ;;
+    "ppc64le" ) echo "Linux-ppc64le" ;;
     "x86_64" ) echo "Linux-x86_64" ;;
     * ) return 1 ;;
     esac
@@ -1032,7 +1083,7 @@ require_gcc() {
       echo "and try again."
       echo
 
-      if [ "$(uname -s)" = "Darwin" ]; then
+      if is_mac; then
         colorize 1 "DETAILS"
         echo ": Apple no longer includes the official GCC compiler with Xcode"
         echo "as of version 4.2. Instead, the \`gcc\` executable is a symlink to"
@@ -1067,7 +1118,7 @@ require_gcc() {
   fi
 
   export CC="$gcc"
-  if [ "$(uname -s)" = "Darwin" ] && [ "$(osx_version)" -ge 1010 ]; then
+  if is_mac -ge 1010; then
     export MACOSX_DEPLOYMENT_TARGET=10.9
   fi
 }
@@ -1075,6 +1126,7 @@ require_gcc() {
 locate_gcc() {
   local gcc gccs
   IFS=: gccs=($(gccs_in_path))
+  IFS="$OLDIFS"
 
   verify_gcc "$CC" ||
   verify_gcc "$(command -v gcc || true)" || {
@@ -1090,6 +1142,7 @@ gccs_in_path() {
   local gcc path paths
   local gccs=()
   IFS=: paths=($PATH)
+  IFS="$OLDIFS"
 
   shopt -s nullglob
   for path in "${paths[@]}"; do
@@ -1122,14 +1175,15 @@ verify_gcc() {
 
 require_llvm() {
   local llvm_version="$1"
-  if [ "$(uname -s)" = "Darwin" ] && [ "$(osx_version)" -ge 1010 ]; then
+  if is_mac -ge 1010; then
     if [[ "$PYTHON_CONFIGURE_OPTS" != *--llvm-* ]]; then
-      if [ "$llvm_version" = "3.2" ]; then
+      case "$llvm_version" in
+      3.2 )
         package_option python configure --prebuilt-name="llvm-3.2-x86_64-apple-darwin13.tar.bz2"
-      else
-        local llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
-        local llvm_config="${llvm_prefix}/bin/llvm-config"
-        if [ -x "$llvm_config" ]; then
+        ;;
+      3.5 )
+        local llvm_config="$(locate_llvm "$llvm_version")"
+        if [ -n "$llvm_config" ]; then
           package_option python configure --llvm-config="$llvm_config"
         else
           { echo
@@ -1140,14 +1194,29 @@ require_llvm() {
             colorize 1 "TO FIX THE PROBLEM"
             echo ": Install Homebrew's llvm package with this"
             echo -n "command: "
-            colorize 4 "brew install llvm"
+            colorize 4 "brew tap homebrew/versions ; brew install llvm35"
             echo
           } >&3
           return 1
         fi
-      fi
+        ;;
+      esac
     fi
   fi
+}
+
+locate_llvm() {
+  local llvm_version="$1"
+  local package llvm_config
+  shopt -s nullglob
+  for package in `brew list 2>/dev/null | grep "^llvm"`; do
+    llvm_config="$(echo "$(brew --prefix "$package")/bin/llvm-config"*)"
+    if [ -n "$llvm_config" ] && [[ "$("$llvm_config" --version)" = "$llvm_version"* ]]; then
+      echo "$llvm_config"
+      break
+    fi
+  done
+  shopt -u nullglob
 }
 
 require_java() {
@@ -1182,8 +1251,31 @@ require_distro() {
   return 1
 }
 
+configured_with_package_dir() {
+  local package_var_name="$(capitalize "$1")"
+  shift 1
+  local PACKAGE_CONFIGURE_OPTS="${package_var_name}_CONFIGURE_OPTS"
+  local PACKAGE_CONFIGURE_OPTS_ARRAY="${package_var_name}_MAKE_OPTS_ARRAY[@]"
+  local arg flag
+  for arg in ${CONFIGURE_OPTS} ${!PACKAGE_CONFIGURE_OPTS} "${!PACKAGE_CONFIGURE_OPTS_ARRAY}"; do
+    if [[ "$arg" == "CPPFLAGS="* ]]; then
+      for flag in ${CPPFLAGS} ${arg##CPPFLAGS=}; do
+        if [[ "$flag" == "-I"* ]]; then
+          local header
+          for header in "$@"; do
+            if [ -e "${flag##-I}/${header#/}" ]; then
+              return 0
+            fi
+          done
+        fi
+      done
+    fi
+  done
+  return 1
+}
+
 needs_yaml() {
-  [[ "$RUBY_CONFIGURE_OPTS" != *--with-libyaml-dir=* ]] &&
+  ! configured_with_package_dir "python" "yaml.h" &&
   ! use_homebrew_yaml
 }
 
@@ -1197,30 +1289,16 @@ use_homebrew_yaml() {
   fi
 }
 
-configured_with_readline_dir() {
+has_broken_mac_readline() {
   # Mac OS X 10.4 has broken readline.
   # https://github.com/yyuu/pyenv/issues/23
-  local arg flag
-  for arg in ${CONFIGURE_OPTS} ${PYTHON_CONFIGURE_OPTS} "${PYTHON_CONFIGURE_OPTS_ARRAY[@]}"; do
-    if [[ "$arg" == "CPPFLAGS="* ]]; then
-      for flag in ${CPPFLAGS} ${arg##CPPFLAGS=}; do
-        if [[ "$flag" == "-I"* ]] && [ -e "${flag##-I}/readline/rlconf.h" ]; then
-          return 0
-        fi
-      done
-    fi
-  done
-  return 1
-}
-
-has_broken_mac_readline() {
-  [ "$(uname -s)" = "Darwin" ] &&
-  ! configured_with_readline_dir &&
+  is_mac &&
+  ! configured_with_package_dir "python" "readline/rlconf.h" &&
   ! use_homebrew_readline
 }
 
 use_homebrew_readline() {
-  if ! configured_with_readline_dir; then
+  if ! configured_with_package_dir "python" "readline/rlconf.h"; then
     local libdir="$(brew --prefix readline 2>/dev/null || true)"
     if [ -d "$libdir" ]; then
       export CPPFLAGS="-I$libdir/include ${CPPFLAGS}"
@@ -1232,9 +1310,8 @@ use_homebrew_readline() {
 }
 
 has_broken_mac_openssl() {
-  [ "$(uname -s)" = "Darwin" ] &&
+  is_mac &&
   [[ "$(/usr/bin/openssl version 2>/dev/null || true)" = "OpenSSL 0.9.8"?* ]] &&
-  [[ "$RUBY_CONFIGURE_OPTS" != *--with-openssl-dir=* ]] &&
   ! use_homebrew_openssl
 }
 
@@ -1293,16 +1370,21 @@ build_package_verify_openssl() {
 
 # Ensure that directories listed in LDFLAGS exist
 build_package_ldflags_dirs() {
-  local arg
-  for arg in $LDFLAGS; do
-    case "$arg" in
-    -L* ) mkdir -p "${arg#-L}" ;;
+  local arg dir
+  set - $LDFLAGS
+  while [ $# -gt 0 ]; do
+    dir=""
+    case "$1" in
+    -L  ) dir="$2" ;;
+    -L* ) dir="${1#-L}" ;;
     esac
+    [ -z "$dir" ] || mkdir -p "$dir"
+    shift 1
   done
 }
 
 build_package_auto_tcltk() {
-  if [ "Darwin" = "$(uname -s)" ] && [ ! -d /usr/include/X11 ]; then
+  if is_mac && [ ! -d /usr/include/X11 ]; then
     if [ -d /opt/X11/include ]; then
       if [[ "$CPPFLAGS" != *-I/opt/X11/include* ]]; then
         export CPPFLAGS="-I/opt/X11/include $CPPFLAGS"
@@ -1346,7 +1428,7 @@ isolated_gem_install() {
 apply_python_patch() {
   local patchfile
   case "$1" in
-  Python-* | jython-* | pypy-* )
+  Python-* | jython-* | pypy-* | stackless-* )
     patchfile="$(mktemp "${TMP}/python-patch.XXXXXX")"
     cat "${2:--}" >"$patchfile"
 
@@ -1517,6 +1599,11 @@ build_package_verify_py35() {
   build_package_verify_py34 "$1" "${2:-3.5}"
 }
 
+# Post-install check for Python 3.6.x
+build_package_verify_py36() {
+  build_package_verify_py35 "$1" "${2:-3.6}"
+}
+
 build_package_ez_setup() {
   local ez_setup="${BUILD_PATH}/ez_setup.py"
   rm -f "${ez_setup}"
@@ -1547,7 +1634,7 @@ build_package_get_pip() {
       http get "${GET_PIP_URL}"
     fi
   } 1> "${get_pip}"
-  "${PYTHON_BIN}" "${get_pip}" ${GET_PIP_OPTS} 1>&4 2>&1 || {
+  "${PYTHON_BIN}" -s "${get_pip}" ${GET_PIP_OPTS} 1>&4 2>&1 || {
     echo "error: failed to install pip via get-pip.py" >&2
     return 1
   }
@@ -1560,7 +1647,7 @@ build_package_ensurepip() {
     ensurepip_opts="--altinstall"
   fi
   # FIXME: `--altinstall` with `get-pip.py`
-  "$PYTHON_BIN" -m ensurepip ${ensurepip_opts} 1>/dev/null 2>&1 || build_package_get_pip "$@" || return 1
+  "$PYTHON_BIN" -s -m ensurepip ${ensurepip_opts} 1>/dev/null 2>&1 || build_package_get_pip "$@" || return 1
 }
 
 version() {
@@ -1600,7 +1687,6 @@ unset IPV6
 
 PYTHON_BUILD_INSTALL_PREFIX="$(abs_dirname "$0")/.."
 
-OLDIFS="$IFS"
 IFS=: PYTHON_BUILD_DEFINITIONS=($PYTHON_BUILD_DEFINITIONS ${PYTHON_BUILD_ROOT:-$PYTHON_BUILD_INSTALL_PREFIX}/share/python-build)
 IFS="$OLDIFS"
 
@@ -1720,25 +1806,14 @@ fi
 
 if [ -z "$PYTHON_BUILD_MIRROR_URL" ]; then
   PYTHON_BUILD_MIRROR_URL="https://yyuu.github.io/pythons"
+  PYTHON_BUILD_DEFAULT_MIRROR=1
 else
   PYTHON_BUILD_MIRROR_URL="${PYTHON_BUILD_MIRROR_URL%/}"
+  PYTHON_BUILD_DEFAULT_MIRROR=
 fi
 
-if [ -n "$PYTHON_BUILD_SKIP_MIRROR" ]; then
+if [ -n "$PYTHON_BUILD_SKIP_MIRROR" ] || ! has_checksum_support compute_sha2; then
   unset PYTHON_BUILD_MIRROR_URL
-fi
-
-if echo test | compute_sha2 >/dev/null; then
-  HAS_SHA2_SUPPORT=1
-else
-  unset HAS_SHA2_SUPPORT
-  unset PYTHON_BUILD_MIRROR_URL
-fi
-
-if echo test | compute_md5 >/dev/null; then
-  HAS_MD5_SUPPORT=1
-else
-  unset HAS_MD5_SUPPORT
 fi
 
 # Add an option to build a debug version of Python (#11)
@@ -1746,10 +1821,13 @@ if [ -n "$DEBUG" ]; then
   package_option python configure --with-pydebug
 fi
 
+# python-build: Specify `--libdir` on configure to fix build on openSUSE (#36)
+package_option python configure --libdir="${PREFIX_PATH}/lib"
+
 # python-build: Set `RPATH` if `--enable-shared` was given (#65, #66, #82)
 if [[ "$CONFIGURE_OPTS" == *"--enable-shared"* ]] || [[ "$PYTHON_CONFIGURE_OPTS" == *"--enable-shared"* ]]; then
   # The ld on Darwin embeds the full paths to each dylib by default
-  if [[ "$LDFLAGS" != *"-rpath="* ]] && [[ "Darwin" != "$(uname -s)" ]]; then
+  if [[ "$LDFLAGS" != *"-rpath="* ]] && ! is_mac; then
     export LDFLAGS="-Wl,-rpath=${PREFIX_PATH}/lib ${LDFLAGS}"
   fi
 fi
@@ -1761,7 +1839,7 @@ fi
 
 # Add support for framework installation (`--enable-framework`) of CPython (#55, #99)
 if [[ "$PYTHON_CONFIGURE_OPTS" == *"--enable-framework"* ]]; then
-  if [[ "Darwin" != "$(uname -s)" ]]; then
+  if ! is_mac; then
     echo "python-build: framework installation is not supported." >&2
     exit 1
   fi
@@ -1781,11 +1859,16 @@ fi
 
 # Build against universal SDK (#219, #220)
 if [[ "$PYTHON_CONFIGURE_OPTS" == *"--enable-universalsdk"* ]]; then
-  if [[ "Darwin" != "$(uname -s)" ]]; then
+  if ! is_mac; then
     echo "python-build: universal installation is not supported." >&2
     exit 1
   fi
   package_option python configure --enable-universalsdk=/ --with-universal-archs=intel
+fi
+
+# Compile with `--enable-unicode=ucs4` by default (#257)
+if [[ "$PYTHON_CONFIGURE_OPTS" != *"--enable-unicode="* ]]; then
+  package_option python configure --enable-unicode=ucs4
 fi
 
 # SSL Certificate error with older wget that does not support Server Name Indication (#60)
@@ -1814,11 +1897,13 @@ if [ -n "${PIP_VERSION}" ]; then
 fi
 
 # Set MACOSX_DEPLOYMENT_TARGET from the product version of OS X (#219, #220)
-if [[ "Darwin" == "$(uname -s)" ]]; then
-  MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null || true)"
-  MACOS_VERSION_ARRAY=(${MACOS_VERSION//\./ })
-  if [ "${#MACOS_VERSION_ARRAY[@]}" -ge 2 ]; then
-    export MACOSX_DEPLOYMENT_TARGET="${MACOS_VERSION_ARRAY[0]}.${MACOS_VERSION_ARRAY[1]}"
+if is_mac; then
+  if [ -z "${MACOSX_DEPLOYMENT_TARGET}" ]; then
+    MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null || true)"
+    MACOS_VERSION_ARRAY=(${MACOS_VERSION//\./ })
+    if [ "${#MACOS_VERSION_ARRAY[@]}" -ge 2 ]; then
+      export MACOSX_DEPLOYMENT_TARGET="${MACOS_VERSION_ARRAY[0]}.${MACOS_VERSION_ARRAY[1]}"
+    fi
   fi
 fi
 

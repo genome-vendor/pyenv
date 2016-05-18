@@ -87,6 +87,10 @@ install_tmp_fixture() {
   run python-build $args "$TMP_FIXTURES/$name" "$destination"
 }
 
+resolve_link() {
+  $(type -p greadlink readlink | head -1) "$1"
+}
+
 @test "apply built-in python patch before building" {
   cached_tarball "Python-3.2.1"
 
@@ -102,7 +106,7 @@ install_tmp_fixture() {
   assert_build_log <<OUT
 patch -p0 --force -i $TMP/python-patch.XXX
 Python-3.2.1: CPPFLAGS="-I${TMP}/install/include " LDFLAGS="-L${TMP}/install/lib "
-Python-3.2.1: --prefix=$INSTALL_ROOT --libdir=$INSTALL_ROOT/lib
+Python-3.2.1: --prefix=$INSTALL_ROOT --libdir=$INSTALL_ROOT/lib --enable-unicode=ucs4
 make -j 2
 make install
 OUT
@@ -130,7 +134,7 @@ patch: bar
 patch: baz
 patch: foo
 Python-3.2.1: CPPFLAGS="-I${TMP}/install/include " LDFLAGS="-L${TMP}/install/lib "
-Python-3.2.1: --prefix=$INSTALL_ROOT --libdir=$INSTALL_ROOT/lib
+Python-3.2.1: --prefix=$INSTALL_ROOT --libdir=$INSTALL_ROOT/lib --enable-unicode=ucs4
 make -j 2
 make install
 OUT
@@ -152,7 +156,7 @@ OUT
 
   assert_build_log <<OUT
 Python-3.2.1: CPPFLAGS="-I${TMP}/install/include " LDFLAGS="-L${TMP}/install/lib "
-Python-3.2.1: --prefix=$INSTALL_ROOT --libdir=$INSTALL_ROOT/lib
+Python-3.2.1: --prefix=$INSTALL_ROOT --libdir=$INSTALL_ROOT/lib --enable-unicode=ucs4
 make -j 2
 make altinstall
 OUT
@@ -174,7 +178,7 @@ OUT
   assert_success
 
   assert_build_log <<OUT
-python -m ensurepip
+python -s -m ensurepip
 OUT
 }
 
@@ -192,6 +196,108 @@ OUT
   assert_success
 
   assert_build_log <<OUT
-python -m ensurepip --altinstall
+python -s -m ensurepip --altinstall
 OUT
+}
+
+@test "python3-config" {
+  mkdir -p "${INSTALL_ROOT}/bin"
+  touch "${INSTALL_ROOT}/bin/python3"
+  chmod +x "${INSTALL_ROOT}/bin/python3"
+  touch "${INSTALL_ROOT}/bin/python3.4"
+  chmod +x "${INSTALL_ROOT}/bin/python3.4"
+  touch "${INSTALL_ROOT}/bin/python3-config"
+  chmod +x "${INSTALL_ROOT}/bin/python3-config"
+  touch "${INSTALL_ROOT}/bin/python3.4-config"
+  chmod +x "${INSTALL_ROOT}/bin/python3.4-config"
+
+  TMPDIR="$TMP" run_inline_definition <<OUT
+verify_python python3.4
+OUT
+  assert_success
+
+  [ -L "${INSTALL_ROOT}/bin/python" ]
+  [ -L "${INSTALL_ROOT}/bin/python-config" ]
+  [[ "$(resolve_link "${INSTALL_ROOT}/bin/python")" == "python3.4" ]]
+  [[ "$(resolve_link "${INSTALL_ROOT}/bin/python-config")" == "python3.4-config" ]]
+}
+
+@test "enable framework" {
+  mkdir -p "${INSTALL_ROOT}/Python.framework/Versions/Current/bin"
+  touch "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3"
+  chmod +x "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3"
+  touch "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3.4"
+  chmod +x "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3.4"
+  touch "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3-config"
+  chmod +x "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3-config"
+  touch "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3.4-config"
+  chmod +x "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python3.4-config"
+
+  stub uname '-s : echo Darwin'
+
+  PYTHON_CONFIGURE_OPTS="--enable-framework" TMPDIR="$TMP" run_inline_definition <<OUT
+echo "PYTHON_CONFIGURE_OPTS_ARRAY=(\${PYTHON_CONFIGURE_OPTS_ARRAY[@]})"
+verify_python python3.4
+OUT
+  assert_success
+  assert_output <<EOS
+PYTHON_CONFIGURE_OPTS_ARRAY=(--libdir=${TMP}/install/lib --enable-framework=${TMP}/install --enable-unicode=ucs4)
+EOS
+
+  [ -L "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python" ]
+  [ -L "${INSTALL_ROOT}/Python.framework/Versions/Current/bin/python-config" ]
+}
+
+@test "enable universalsdk" {
+  stub uname '-s : echo Darwin'
+
+  PYTHON_CONFIGURE_OPTS="--enable-universalsdk" TMPDIR="$TMP" run_inline_definition <<OUT
+echo "PYTHON_CONFIGURE_OPTS_ARRAY=(\${PYTHON_CONFIGURE_OPTS_ARRAY[@]})"
+OUT
+  assert_success
+  assert_output <<EOS
+PYTHON_CONFIGURE_OPTS_ARRAY=(--libdir=${TMP}/install/lib --enable-universalsdk=/ --with-universal-archs=intel --enable-unicode=ucs4)
+EOS
+}
+
+@test "enable custom unicode configuration" {
+  cached_tarball "Python-3.2.1"
+
+  stub brew false
+  stub "$MAKE" \
+    " : echo \"$MAKE \$@\" >> build.log" \
+    " : echo \"$MAKE \$@\" >> build.log && cat build.log >> '$INSTALL_ROOT/build.log'"
+
+  PYTHON_CONFIGURE_OPTS="--enable-unicode=ucs2" TMPDIR="$TMP" install_tmp_fixture definitions/vanilla-python < /dev/null
+  assert_success
+
+  assert_build_log <<OUT
+Python-3.2.1: CPPFLAGS="-I${TMP}/install/include " LDFLAGS="-L${TMP}/install/lib "
+Python-3.2.1: --prefix=$INSTALL_ROOT --enable-unicode=ucs2 --libdir=$INSTALL_ROOT/lib
+make -j 2
+make install
+OUT
+
+  unstub make
+}
+
+@test "default MACOSX_DEPLOYMENT_TARGET" {
+  stub uname '-s : echo Darwin'
+  stub sw_vers '-productVersion : echo 10.10'
+
+  TMPDIR="$TMP" run_inline_definition <<OUT
+echo "\${MACOSX_DEPLOYMENT_TARGET}"
+OUT
+  assert_success
+  assert_output "10.10"
+}
+
+@test "use custom MACOSX_DEPLOYMENT_TARGET if defined" {
+  stub uname '-s : echo Darwin'
+
+  MACOSX_DEPLOYMENT_TARGET="10.4" TMPDIR="$TMP" run_inline_definition <<OUT
+echo "\${MACOSX_DEPLOYMENT_TARGET}"
+OUT
+  assert_success
+  assert_output "10.4"
 }

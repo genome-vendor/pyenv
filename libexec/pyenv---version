@@ -12,9 +12,10 @@
 set -e
 [ -n "$PYENV_DEBUG" ] && set -x
 
-version="20150601"
+version="20160509"
+git_revision=""
 
-if cd "$PYENV_ROOT" 2>/dev/null; then
+if cd "${BASH_SOURCE%/*}" 2>/dev/null && git remote -v 2>/dev/null | grep -q pyenv; then
   git_revision="$(git describe --tags HEAD 2>/dev/null || true)"
   git_revision="${git_revision#v}"
 fi
